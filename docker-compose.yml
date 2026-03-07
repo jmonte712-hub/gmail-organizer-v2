@@ -1,5 +1,3 @@
-version: "3.8"
-
 services:
   n8n:
     image: n8nio/n8n:latest
@@ -18,9 +16,32 @@ services:
       - GENERIC_TIMEZONE=Europe/Madrid
       - TZ=Europe/Madrid
       - OPENAI_API_KEY=${OPENAI_API_KEY}
+      - PYTHON_CLASSIFIER_URL=http://python-classifier:5679
     volumes:
       - n8n_data:/home/node/.n8n
       - ./workflows:/home/node/workflows:ro
+    depends_on:
+      - python-classifier
+    networks:
+      - gmail-organizer-net
+
+  python-classifier:
+    build:
+      context: ./python-classifier
+      dockerfile: Dockerfile
+    container_name: gmail-organizer-python
+    restart: unless-stopped
+    ports:
+      - "5679:5679"
+    environment:
+      - FLASK_ENV=production
+      - PORT=5679
+    networks:
+      - gmail-organizer-net
+
+networks:
+  gmail-organizer-net:
+    driver: bridge
 
 volumes:
   n8n_data:
