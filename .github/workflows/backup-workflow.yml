@@ -1,0 +1,17 @@
+name: Log workflow update
+
+on:
+  push:
+    paths:
+      - 'workflows/*.json'
+
+jobs:
+  log:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v3
+      - name: Log
+        run: |
+          echo "✅ Workflow JSON aggiornato"
+          echo "Data: $(date)"
+          git diff --name-only HEAD~1 HEAD

@@ -1,0 +1,27 @@
+{
+  "folders": [{ "name": "📬 Gmail Organizer v2", "path": "." }],
+  "settings": {
+    "editor.formatOnSave": true,
+    "editor.tabSize": 2,
+    "files.associations": { "*.workflow.json": "json" },
+    "editor.defaultFormatter": "esbenp.prettier-vscode",
+    "workbench.colorCustomizations": {
+      "titleBar.activeBackground": "#0a1e1a",
+      "titleBar.activeForeground": "#34d399"
+    },
+    "explorer.fileNesting.enabled": true,
+    "explorer.fileNesting.patterns": {
+      "docker-compose.yml": ".env,.env.example,.gitignore",
+      "*.workflow.json": "${capture}.backup.json"
+    }
+  },
+  "extensions": {
+    "recommendations": [
+      "esbenp.prettier-vscode",
+      "ms-vscode.vscode-json",
+      "ms-azuretools.vscode-docker",
+      "github.vscode-pull-request-github",
+      "aaron-bond.better-comments"
+    ]
+  }
+}

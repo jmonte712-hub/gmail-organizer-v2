@@ -1,0 +1,18 @@
+# Dati sensibili — mai su GitHub
+.env
+*.env.local
+
+# n8n data volume locale
+n8n_data/
+.n8n/
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Editor
+.vscode/settings.json
+*.log
+
+# Backup automatici n8n
+*.backup.json
