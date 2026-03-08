@@ -1,0 +1,336 @@
+{
+  "name": "Gmail Organizer v2 — Python + OpenAI Hybrid",
+  "nodes": [
+    {
+      "parameters": {
+        "pollTimes": {
+          "item": [{ "mode": "everyHour" }]
+        },
+        "filters": {
+          "labelIds": ["INBOX"],
+          "q": "-label:AI-PROCESSED -label:AI-ERROR"
+        }
+      },
+      "id": "node-gmail-trigger",
+      "name": "📬 Gmail Trigger",
+      "type": "n8n-nodes-base.gmailTrigger",
+      "typeVersion": 1,
+      "position": [-800, 200],
+      "credentials": {
+        "gmailOAuth2": {
+          "id": "Nf4AclOI6EEZdWDW",
+          "name": "Gmail account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "mode": "runOnceForEachItem",
+        "jsCode": "const item = $input.item.json;\n\nconst fromRaw = item.from || '';\nconst emailMatch = fromRaw.match(/<(.+?)>/) || [null, fromRaw];\nconst emailAddress = emailMatch[1] || fromRaw;\nconst domain = emailAddress.includes('@') ? emailAddress.split('@')[1].toLowerCase() : 'sconosciuto';\nconst nomeMittente = fromRaw.includes('<') ? fromRaw.split('<')[0].trim().replace(/\"/g, '') : emailAddress;\n\nconst attachments = item.attachments || [];\n\nreturn {\n  json: {\n    threadId: item.threadId,\n    messageId: item.id,\n    fromRaw,\n    emailAddress,\n    domain,\n    nomeMittente,\n    oggetto: item.subject || '(nessun oggetto)',\n    snippet: item.snippet || '',\n    data: item.date || new Date().toISOString(),\n    hasAttachments: attachments.length > 0,\n    numAllegati: attachments.length,\n    attachments\n  }\n};"
+      },
+      "id": "node-estrai-metadati",
+      "name": "🔍 Estrai Metadati",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [-560, 200]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "http://python-classifier:5679/classify",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            { "name": "Content-Type", "value": "application/json" }
+          ]
+        },
+        "sendBody": true,
+        "bodyParameters": {
+          "parameters": [
+            { "name": "domain",      "value": "={{ $json.domain }}" },
+            { "name": "subject",     "value": "={{ $json.oggetto }}" },
+            { "name": "sender_name", "value": "={{ $json.nomeMittente }}" },
+            { "name": "snippet",     "value": "={{ $json.snippet }}" }
+          ]
+        },
+        "options": { "timeout": 5000 }
+      },
+      "id": "node-python-classifier",
+      "name": "🐍 Python Classifier",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4,
+      "position": [-320, 200],
+      "retryOnFail": true,
+      "maxTries": 3,
+      "waitBetweenTries": 2000
+    },
+    {
+      "parameters": {
+        "mode": "runOnceForEachItem",
+        "jsCode": "// Unisce i dati dell'email con la risposta Python\nconst pythonResult = $input.item.json;\nconst metadati = $('🔍 Estrai Metadati').item.json;\n\nreturn {\n  json: {\n    ...metadati,\n    // Risultato Python\n    py_categoria:      pythonResult.categoria,\n    py_sottocategoria: pythonResult.sottocategoria,\n    py_confidence:     pythonResult.confidence,\n    py_needs_ai:       pythonResult.needs_ai,\n    py_method:         pythonResult.method,\n    py_label_gmail:    pythonResult.label_gmail,\n    py_priorita:       pythonResult.priorita\n  }\n};"
+      },
+      "id": "node-merge-python",
+      "name": "🔗 Merge Dati Python",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [-80, 200]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "boolean": [
+            {
+              "value1": "={{ $json.py_needs_ai }}",
+              "value2": false
+            }
+          ]
+        }
+      },
+      "id": "node-if-needs-ai",
+      "name": "🤔 Serve OpenAI?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 1,
+      "position": [160, 200]
+    },
+    {
+      "parameters": {
+        "resource": "chat",
+        "model": "gpt-4o-mini",
+        "prompt": {
+          "messages": [
+            {
+              "role": "system",
+              "content": "Sei un assistente che classifica email in italiano. Rispondi SOLO con un oggetto JSON valido, senza markdown, senza backtick, senza testo aggiuntivo."
+            },
+            {
+              "content": "=Classifica questa email:\nMittente: {{ $json.fromRaw }}\nDominio: {{ $json.domain }}\nOggetto: {{ $json.oggetto }}\nAnteprima: {{ $json.snippet }}\nHa allegati: {{ $json.hasAttachments }}\n\nCATEGORIE:\n1. AI-TECH → claude, openai, gemini, midjourney, n8n, cursor, altra-ai-tech\n2. EBIS → lezioni, pagamenti-ebis, comunicazioni, progetti, altra-ebis\n3. VIAGGI → voli, hotel, treni, noleggio-auto, altri-viaggi\n4. FATTURE-RICEVUTE → bollette-luce-gas, bollette-telefono-internet, affitto, banca, imposte-tasse\n5. ACQUISTI-ONLINE → amazon, aliexpress, ebay, zalando, pccomponentes, altri-shop\n6. PERSONALE → siria, luigi, novella, niccolo, patrizia, altri-personali\n7. IMMOBILIARE → affitti, vendita, traspaso, agenzie-immobiliari\n8. ALTRO → newsletter, spam-promo, da-valutare\n\nRispondi con questo JSON esatto:\n{\"categoria\": \"NOME_CATEGORIA\", \"sottocartella\": \"nome-sottocategoria\", \"priorita\": \"alta|media|bassa\", \"label_gmail\": \"CATEGORIA/sottocategoria\"}"
+            }
+          ]
+        },
+        "options": { "maxTokens": 300, "temperature": 0.2 },
+        "requestOptions": {}
+      },
+      "id": "node-openai",
+      "name": "🤖 OpenAI (fallback)",
+      "type": "n8n-nodes-base.openAi",
+      "typeVersion": 1,
+      "position": [400, 340],
+      "credentials": {
+        "openAiApi": {
+          "id": "FUVQKoSC3Tm1Un3Z",
+          "name": "OpenAi account"
+        }
+      },
+      "retryOnFail": true,
+      "maxTries": 3,
+      "waitBetweenTries": 60000
+    },
+    {
+      "parameters": {
+        "mode": "runOnceForEachItem",
+        "jsCode": "// Percorso A: Python ha classificato con alta confidenza\nconst item = $input.item.json;\n\nconst labelMap = {\n  'AI-TECH':          'Label_7902931228053036763',\n  'EBIS':             'Label_6670020163438591806',\n  'VIAGGI':           'Label_3926604745380117165',\n  'FATTURE-RICEVUTE': 'Label_1756272630694179019',\n  'ACQUISTI-ONLINE':  'Label_5446396601638215443',\n  'PERSONALE':        'Label_6458834741239452187',\n  'IMMOBILIARE':      'Label_7609977426367813609',\n  'ALTRO':            'Label_17396968883308128'\n};\n\nconst categoria     = item.py_categoria;\nconst sottocartella = item.py_sottocategoria;\nconst cartellaBase  = 'Email Organizer';\nconst percorso      = `${cartellaBase}/${categoria}/${sottocartella}`;\n\nreturn { json: {\n  ...item,\n  categoria,\n  sottocartella,\n  priorita:       item.py_priorita,\n  labelId:        labelMap[categoria] || 'Label_17396968883308128',\n  label_gmail:    item.py_label_gmail,\n  percorsoGDrive: percorso,\n  percorsoICloud: `/Users/jacopo/Library/Mobile Documents/com~apple~CloudDocs/${percorso}`,\n  classificatore: 'python',\n  confidence:     item.py_confidence\n}};"
+      },
+      "id": "node-parse-python",
+      "name": "📊 Parse Python Result",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [400, 80]
+    },
+    {
+      "parameters": {
+        "mode": "runOnceForEachItem",
+        "jsCode": "// Percorso B: OpenAI ha classificato\nconst aiResponse = $input.item.json;\nconst metadati = $('🔗 Merge Dati Python').item.json;\n\nconst labelMap = {\n  'AI-TECH':          'Label_7902931228053036763',\n  'EBIS':             'Label_6670020163438591806',\n  'VIAGGI':           'Label_3926604745380117165',\n  'FATTURE-RICEVUTE': 'Label_1756272630694179019',\n  'ACQUISTI-ONLINE':  'Label_5446396601638215443',\n  'PERSONALE':        'Label_6458834741239452187',\n  'IMMOBILIARE':      'Label_7609977426367813609',\n  'ALTRO':            'Label_17396968883308128'\n};\n\nlet classificazione;\ntry {\n  const rawText = aiResponse.choices[0].message.content;\n  const cleanText = rawText.replace(/```json|```/g, '').trim();\n  classificazione = JSON.parse(cleanText);\n  if (!classificazione.categoria || !classificazione.sottocartella) throw new Error('Campi mancanti');\n} catch(e) {\n  classificazione = { categoria: 'ALTRO', sottocartella: 'da-valutare', priorita: 'bassa', label_gmail: 'ALTRO/da-valutare' };\n}\n\nconst cartellaBase = 'Email Organizer';\nconst percorso = `${cartellaBase}/${classificazione.categoria}/${classificazione.sottocartella}`;\n\nreturn { json: {\n  ...metadati,\n  categoria:      classificazione.categoria,\n  sottocartella:  classificazione.sottocartella,\n  priorita:       classificazione.priorita,\n  labelId:        labelMap[classificazione.categoria] || 'Label_17396968883308128',\n  label_gmail:    classificazione.label_gmail,\n  percorsoGDrive: percorso,\n  percorsoICloud: `/Users/jacopo/Library/Mobile Documents/com~apple~CloudDocs/${percorso}`,\n  classificatore: 'openai',\n  confidence:     null\n}};"
+      },
+      "id": "node-parse-openai",
+      "name": "📊 Parse OpenAI Result",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [640, 340]
+    },
+    {
+      "parameters": {
+        "operation": "addLabels",
+        "messageId": "={{ $json.messageId }}",
+        "labelIds": "=Label_5257001649654812333"
+      },
+      "id": "node-label-processed",
+      "name": "🏷️ Label AI-PROCESSED",
+      "type": "n8n-nodes-base.gmail",
+      "typeVersion": 2,
+      "position": [880, 80],
+      "credentials": {
+        "gmailOAuth2": { "id": "Nf4AclOI6EEZdWDW", "name": "Gmail account" }
+      },
+      "retryOnFail": true,
+      "maxTries": 3,
+      "waitBetweenTries": 30000
+    },
+    {
+      "parameters": {
+        "operation": "addLabels",
+        "messageId": "={{ $json.messageId }}",
+        "labelIds": "={{ $json.labelId }}"
+      },
+      "id": "node-label-categoria",
+      "name": "🏷️ Label Categoria",
+      "type": "n8n-nodes-base.gmail",
+      "typeVersion": 2,
+      "position": [880, 220],
+      "credentials": {
+        "gmailOAuth2": { "id": "Nf4AclOI6EEZdWDW", "name": "Gmail account" }
+      },
+      "retryOnFail": true,
+      "maxTries": 3,
+      "waitBetweenTries": 30000
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "boolean": [
+            { "value1": "={{ $json.hasAttachments }}", "value2": true }
+          ]
+        }
+      },
+      "id": "node-if-allegati",
+      "name": "📎 Ha Allegati?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 1,
+      "position": [880, 360]
+    },
+    {
+      "parameters": {
+        "mode": "runOnceForEachItem",
+        "jsCode": "const item = $input.item.json;\nconst attachments = item.attachments || [];\nif (attachments.length === 0) return [];\nreturn attachments.map(att => ({ json: {\n  categoria:      item.categoria,\n  sottocartella:  item.sottocartella,\n  percorsoGDrive: item.percorsoGDrive,\n  percorsoICloud: item.percorsoICloud,\n  prefissoFile:   `${new Date().getFullYear()}-${String(new Date().getMonth()+1).padStart(2,'0')}_${item.sottocartella}`,\n  messageId:      item.messageId,\n  attachmentName: att.filename || 'allegato',\n  attachmentId:   att.attachmentId || att.id,\n  nomeFileFinale: `${new Date().getFullYear()}-${String(new Date().getMonth()+1).padStart(2,'0')}_${item.sottocartella}_${att.filename || 'allegato'}`\n}}));"
+      },
+      "id": "node-espandi-allegati",
+      "name": "📂 Espandi Allegati",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [1120, 360]
+    },
+    {
+      "parameters": {
+        "operation": "get",
+        "messageId": "={{ $json.messageId }}"
+      },
+      "id": "node-scarica-allegato",
+      "name": "⬇️ Scarica Allegato",
+      "type": "n8n-nodes-base.gmail",
+      "typeVersion": 2,
+      "position": [1360, 360],
+      "credentials": {
+        "gmailOAuth2": { "id": "Nf4AclOI6EEZdWDW", "name": "Gmail account" }
+      },
+      "retryOnFail": true,
+      "maxTries": 3,
+      "waitBetweenTries": 30000
+    },
+    {
+      "parameters": {
+        "name": "={{ $('📂 Espandi Allegati').item.json.nomeFileFinale }}",
+        "driveId": { "__rl": true, "mode": "list", "value": "My Drive" },
+        "folderId": { "__rl": true, "mode": "list", "value": "root" },
+        "options": {}
+      },
+      "id": "node-gdrive",
+      "name": "☁️ Upload Google Drive",
+      "type": "n8n-nodes-base.googleDrive",
+      "typeVersion": 3,
+      "position": [1600, 260],
+      "credentials": {
+        "googleDriveOAuth2Api": { "id": "xC171bYJXjbTqEns", "name": "Google Drive account" }
+      },
+      "retryOnFail": true,
+      "maxTries": 3,
+      "waitBetweenTries": 60000
+    },
+    {
+      "parameters": {
+        "mode": "runOnceForEachItem",
+        "jsCode": "const fs = require('fs');\nconst datiAllegato = $('📂 Espandi Allegati').item.json;\nconst percorsoICloud = datiAllegato.percorsoICloud;\nconst nomeFile = datiAllegato.nomeFileFinale;\nconst percorsoCompleto = `${percorsoICloud}/${nomeFile}`;\ntry {\n  fs.mkdirSync(percorsoICloud, { recursive: true });\n  const fileData = $input.item.binary?.data;\n  if (fileData) {\n    fs.writeFileSync(percorsoCompleto, Buffer.from(fileData.data, 'base64'));\n  }\n  return [{ json: { success: true, percorso: percorsoCompleto } }];\n} catch(e) {\n  return [{ json: { success: false, errore: e.message } }];\n}"
+      },
+      "id": "node-icloud",
+      "name": "🍎 Salva su iCloud",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [1600, 460]
+    },
+    {
+      "parameters": {
+        "mode": "runOnceForEachItem",
+        "jsCode": "const item = $input.item.json;\nconsole.log(`✅ Email processata | classificatore: ${item.classificatore} | confidence: ${item.confidence ?? 'N/A (OpenAI)'} | ${item.categoria}/${item.sottocartella}`);\nreturn [{ json: {\n  status: 'completato',\n  mittente: item.emailAddress,\n  categoria: item.categoria,\n  sottocartella: item.sottocartella,\n  classificatore: item.classificatore,\n  confidence: item.confidence,\n  timestamp: new Date().toISOString()\n}}];"
+      },
+      "id": "node-log",
+      "name": "✅ Log Completamento",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [1120, 160]
+    }
+  ],
+  "connections": {
+    "📬 Gmail Trigger": {
+      "main": [[{ "node": "🔍 Estrai Metadati", "type": "main", "index": 0 }]]
+    },
+    "🔍 Estrai Metadati": {
+      "main": [[{ "node": "🐍 Python Classifier", "type": "main", "index": 0 }]]
+    },
+    "🐍 Python Classifier": {
+      "main": [[{ "node": "🔗 Merge Dati Python", "type": "main", "index": 0 }]]
+    },
+    "🔗 Merge Dati Python": {
+      "main": [[{ "node": "🤔 Serve OpenAI?", "type": "main", "index": 0 }]]
+    },
+    "🤔 Serve OpenAI?": {
+      "main": [
+        [{ "node": "📊 Parse Python Result", "type": "main", "index": 0 }],
+        [{ "node": "🤖 OpenAI (fallback)", "type": "main", "index": 0 }]
+      ]
+    },
+    "🤖 OpenAI (fallback)": {
+      "main": [[{ "node": "📊 Parse OpenAI Result", "type": "main", "index": 0 }]]
+    },
+    "📊 Parse Python Result": {
+      "main": [[
+        { "node": "🏷️ Label AI-PROCESSED", "type": "main", "index": 0 },
+        { "node": "🏷️ Label Categoria", "type": "main", "index": 0 },
+        { "node": "📎 Ha Allegati?", "type": "main", "index": 0 }
+      ]]
+    },
+    "📊 Parse OpenAI Result": {
+      "main": [[
+        { "node": "🏷️ Label AI-PROCESSED", "type": "main", "index": 0 },
+        { "node": "🏷️ Label Categoria", "type": "main", "index": 0 },
+        { "node": "📎 Ha Allegati?", "type": "main", "index": 0 }
+      ]]
+    },
+    "🏷️ Label AI-PROCESSED": {
+      "main": [[{ "node": "✅ Log Completamento", "type": "main", "index": 0 }]]
+    },
+    "📎 Ha Allegati?": {
+      "main": [
+        [{ "node": "📂 Espandi Allegati", "type": "main", "index": 0 }],
+        []
+      ]
+    },
+    "📂 Espandi Allegati": {
+      "main": [[{ "node": "⬇️ Scarica Allegato", "type": "main", "index": 0 }]]
+    },
+    "⬇️ Scarica Allegato": {
+      "main": [[
+        { "node": "☁️ Upload Google Drive", "type": "main", "index": 0 },
+        { "node": "🍎 Salva su iCloud", "type": "main", "index": 0 }
+      ]]
+    },
+    "☁️ Upload Google Drive": {
+      "main": [[{ "node": "✅ Log Completamento", "type": "main", "index": 0 }]]
+    },
+    "🍎 Salva su iCloud": {
+      "main": [[{ "node": "✅ Log Completamento", "type": "main", "index": 0 }]]
+    }
+  },
+  "settings": {
+    "executionOrder": "v1",
+    "errorWorkflow": "gmail-error-handler"
+  },
+  "tags": ["gmail", "v2", "python", "openai", "hybrid"]
+}
